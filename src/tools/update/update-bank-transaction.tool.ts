@@ -3,6 +3,7 @@ import { CreateXeroTool } from "../../helpers/create-xero-tool.js";
 import { updateXeroBankTransaction } from "../../handlers/update-xero-bank-transaction.handler.js";
 import { bankTransactionDeepLink } from "../../consts/deeplinks.js";
 import { xeroClient } from "../../clients/xero-client.js";
+import { processAttachments } from "../../helpers/process-attachments.js";
 
 const lineItemSchema = z.object({
   description: z.string(),
@@ -66,20 +67,27 @@ const UpdateBankTransactionTool = CreateXeroTool(
 
     const attachmentResults = [];
     if (attachments && attachments.length > 0 && bankTransaction.bankTransactionID) {
-      for (const attachment of attachments) {
-        try {
-          await xeroClient.accountingApi.createBankTransactionAttachmentByFileName(
-            xeroClient.tenantId,
-            bankTransaction.bankTransactionID,
-            attachment.fileName,
-            Buffer.from(attachment.base64Content, 'base64')
-          );
-          attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          console.error(`Attachment failed for ${attachment.fileName}:`, error);
-          attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+      try {
+        const processedAttachments = await processAttachments(attachments);
+        for (const attachment of processedAttachments) {
+          try {
+            await xeroClient.accountingApi.createBankTransactionAttachmentByFileName(
+              xeroClient.tenantId,
+              bankTransaction.bankTransactionID,
+              attachment.fileName,
+              Buffer.from(attachment.base64Content, 'base64')
+            );
+            attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Attachment failed for ${attachment.fileName}:`, error);
+            attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+          }
         }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Failed to process attachments:`, error);
+        attachmentResults.push({ fileName: 'unknown', status: 'failed', error: `Processing failed: ${errorMessage}` });
       }
     }
 

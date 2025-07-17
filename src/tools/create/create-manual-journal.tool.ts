@@ -5,6 +5,8 @@ import { DeepLinkType, getDeepLink } from "../../helpers/get-deeplink.js";
 import { ensureError } from "../../helpers/ensure-error.js";
 import { LineAmountTypes, ManualJournal } from "xero-node";
 import { xeroClient } from "../../clients/xero-client.js";
+import { attachmentsArraySchema } from "../../schemas/attachment.schema.js";
+import { processAttachments } from "../../helpers/process-attachments.js";
 
 const CreateManualJournalTool = CreateXeroTool(
   "create-manual-journal",
@@ -63,11 +65,7 @@ const CreateManualJournalTool = CreateXeroTool(
       .describe(
         "Optional boolean to show on cash basis reports, default is true",
       ),
-    attachments: z.array(z.object({
-      fileName: z.string().describe("File name with extension"),
-      mimeType: z.string().describe("MIME type (optional)").optional(),
-      base64Content: z.string().describe("Base64 encoded file")
-    })).describe("Array of file attachments").optional(),
+    attachments: attachmentsArraySchema,
   },
   async (args) => {
     try {
@@ -102,20 +100,27 @@ const CreateManualJournalTool = CreateXeroTool(
 
       const attachmentResults = [];
       if (args.attachments && args.attachments.length > 0 && manualJournal.manualJournalID) {
-        for (const attachment of args.attachments) {
-          try {
-            await xeroClient.accountingApi.createManualJournalAttachmentByFileName(
-              xeroClient.tenantId,
-              manualJournal.manualJournalID,
-              attachment.fileName,
-              Buffer.from(attachment.base64Content, 'base64')
-            );
-            attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`Attachment failed for ${attachment.fileName}:`, error);
-            attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+        try {
+          const processedAttachments = await processAttachments(args.attachments);
+          for (const attachment of processedAttachments) {
+            try {
+              await xeroClient.accountingApi.createManualJournalAttachmentByFileName(
+                xeroClient.tenantId,
+                manualJournal.manualJournalID,
+                attachment.fileName,
+                Buffer.from(attachment.base64Content, 'base64')
+              );
+              attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              console.error(`Attachment failed for ${attachment.fileName}:`, error);
+              attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+            }
           }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`Failed to process attachments:`, error);
+          attachmentResults.push({ fileName: 'unknown', status: 'failed', error: `Processing failed: ${errorMessage}` });
         }
       }
 
