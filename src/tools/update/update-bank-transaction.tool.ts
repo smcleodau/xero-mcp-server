@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CreateXeroTool } from "../../helpers/create-xero-tool.js";
 import { updateXeroBankTransaction } from "../../handlers/update-xero-bank-transaction.handler.js";
 import { bankTransactionDeepLink } from "../../consts/deeplinks.js";
+import { xeroClient } from "../../clients/xero-client.js";
 
 const lineItemSchema = z.object({
   description: z.string(),
@@ -26,7 +27,12 @@ const UpdateBankTransactionTool = CreateXeroTool(
       Do not modify line items that have not been specified by the user",
     ),
     reference: z.string().optional(),
-    date: z.string().optional()
+    date: z.string().optional(),
+    attachments: z.array(z.object({
+      fileName: z.string().describe("File name with extension"),
+      mimeType: z.string().describe("MIME type (optional)").optional(),
+      base64Content: z.string().describe("Base64 encoded file")
+    })).describe("Array of file attachments").optional()
   },
   async (
     {
@@ -35,7 +41,8 @@ const UpdateBankTransactionTool = CreateXeroTool(
       contactId,
       lineItems,
       reference,
-      date
+      date,
+      attachments
     }
   ) => {
     const result = await updateXeroBankTransaction(bankTransactionId, type, contactId, lineItems, reference, date);
@@ -57,6 +64,25 @@ const UpdateBankTransactionTool = CreateXeroTool(
       ? bankTransactionDeepLink(bankTransaction.bankAccount.accountID, bankTransaction.bankTransactionID)
       : null;
 
+    const attachmentResults = [];
+    if (attachments && attachments.length > 0 && bankTransaction.bankTransactionID) {
+      for (const attachment of attachments) {
+        try {
+          await xeroClient.accountingApi.createBankTransactionAttachmentByFileName(
+            xeroClient.tenantId,
+            bankTransaction.bankTransactionID,
+            attachment.fileName,
+            Buffer.from(attachment.base64Content, 'base64')
+          );
+          attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`Attachment failed for ${attachment.fileName}:`, error);
+          attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+        }
+      }
+    }
+
     return {
       content: [
         {
@@ -68,6 +94,7 @@ const UpdateBankTransactionTool = CreateXeroTool(
             `Contact: ${bankTransaction?.contact?.name}`,
             `Total: ${bankTransaction?.total}`,
             `Status: ${bankTransaction?.status}`,
+            attachmentResults.length > 0 ? `Attachments: ${attachmentResults.map(r => `${r.fileName} (${r.status})`).join(', ')}` : null,
             deepLink ? `Link to view: ${deepLink}` : null
           ].filter(Boolean).join("\n"),
         },

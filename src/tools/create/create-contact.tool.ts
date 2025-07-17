@@ -14,8 +14,9 @@ const CreateContactTool = CreateXeroTool(
     name: z.string(),
     email: z.string().email().optional(),
     phone: z.string().optional(),
+    bankAccountDetails: z.string().describe("Bank account number for the contact").optional(),
   },
-  async ({ name, email, phone }) => {
+  async ({ name, email, phone, bankAccountDetails }) => {
     try {
       const response = await createXeroContact(name, email, phone);
       if (response.isError) {

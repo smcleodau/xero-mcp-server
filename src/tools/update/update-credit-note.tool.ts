@@ -2,6 +2,7 @@ import { z } from "zod";
 import { updateXeroCreditNote } from "../../handlers/update-xero-credit-note.handler.js";
 import { DeepLinkType, getDeepLink } from "../../helpers/get-deeplink.js";
 import { CreateXeroTool } from "../../helpers/create-xero-tool.js";
+import { xeroClient } from "../../clients/xero-client.js";
 
 const lineItemSchema = z.object({
   description: z.string(),
@@ -28,6 +29,11 @@ const UpdateCreditNoteTool = CreateXeroTool(
     reference: z.string().optional(),
     date: z.string().optional(),
     contactId: z.string().optional(),
+    attachments: z.array(z.object({
+      fileName: z.string().describe("File name with extension"),
+      mimeType: z.string().describe("MIME type (optional)").optional(),
+      base64Content: z.string().describe("Base64 encoded file")
+    })).describe("Array of file attachments").optional(),
   },
   async (
     {
@@ -36,6 +42,7 @@ const UpdateCreditNoteTool = CreateXeroTool(
       reference,
       date,
       contactId,
+      attachments,
     }: {
       creditNoteId: string;
       lineItems?: Array<{
@@ -48,6 +55,11 @@ const UpdateCreditNoteTool = CreateXeroTool(
       reference?: string;
       date?: string;
       contactId?: string;
+      attachments?: Array<{
+        fileName: string;
+        mimeType?: string;
+        base64Content: string;
+      }>;
     },
   ) => {
     const result = await updateXeroCreditNote(
@@ -74,6 +86,26 @@ const UpdateCreditNoteTool = CreateXeroTool(
       ? await getDeepLink(DeepLinkType.CREDIT_NOTE, creditNote.creditNoteID)
       : null;
 
+    const attachmentResults = [];
+    if (attachments && attachments.length > 0 && creditNote.creditNoteID) {
+      for (const attachment of attachments) {
+        try {
+          await xeroClient.accountingApi.createCreditNoteAttachmentByFileName(
+            xeroClient.tenantId,
+            creditNote.creditNoteID,
+            attachment.fileName,
+            Buffer.from(attachment.base64Content, 'base64'),
+            true
+          );
+          attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`Attachment failed for ${attachment.fileName}:`, error);
+          attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+        }
+      }
+    }
+
     return {
       content: [
         {
@@ -84,6 +116,7 @@ const UpdateCreditNoteTool = CreateXeroTool(
             `Contact: ${creditNote?.contact?.name}`,
             `Total: ${creditNote?.total}`,
             `Status: ${creditNote?.status}`,
+            attachmentResults.length > 0 ? `Attachments: ${attachmentResults.map(r => `${r.fileName} (${r.status})`).join(', ')}` : null,
             deepLink ? `Link to view: ${deepLink}` : null,
           ].join("\n"),
         },

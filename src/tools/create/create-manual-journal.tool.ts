@@ -4,6 +4,7 @@ import { createXeroManualJournal } from "../../handlers/create-xero-manual-journ
 import { DeepLinkType, getDeepLink } from "../../helpers/get-deeplink.js";
 import { ensureError } from "../../helpers/ensure-error.js";
 import { LineAmountTypes, ManualJournal } from "xero-node";
+import { xeroClient } from "../../clients/xero-client.js";
 
 const CreateManualJournalTool = CreateXeroTool(
   "create-manual-journal",
@@ -62,6 +63,11 @@ const CreateManualJournalTool = CreateXeroTool(
       .describe(
         "Optional boolean to show on cash basis reports, default is true",
       ),
+    attachments: z.array(z.object({
+      fileName: z.string().describe("File name with extension"),
+      mimeType: z.string().describe("MIME type (optional)").optional(),
+      base64Content: z.string().describe("Base64 encoded file")
+    })).describe("Array of file attachments").optional(),
   },
   async (args) => {
     try {
@@ -94,6 +100,25 @@ const CreateManualJournalTool = CreateXeroTool(
           )
         : null;
 
+      const attachmentResults = [];
+      if (args.attachments && args.attachments.length > 0 && manualJournal.manualJournalID) {
+        for (const attachment of args.attachments) {
+          try {
+            await xeroClient.accountingApi.createManualJournalAttachmentByFileName(
+              xeroClient.tenantId,
+              manualJournal.manualJournalID,
+              attachment.fileName,
+              Buffer.from(attachment.base64Content, 'base64')
+            );
+            attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Attachment failed for ${attachment.fileName}:`, error);
+            attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+          }
+        }
+      }
+
       return {
         content: [
           {
@@ -125,6 +150,7 @@ const CreateManualJournalTool = CreateXeroTool(
                   }))
                 : [{ type: "text" as const, text: "No journal lines" }],
               `Show on Cash Basis Reports: ${manualJournal.showOnCashBasisReports}`,
+              attachmentResults.length > 0 ? `Attachments: ${attachmentResults.map(r => `${r.fileName} (${r.status})`).join(', ')}` : null,
               deepLink ? `Link to view: ${deepLink}` : null,
             ]
               .filter(Boolean)

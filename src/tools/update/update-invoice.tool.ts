@@ -2,6 +2,7 @@ import { z } from "zod";
 import { updateXeroInvoice } from "../../handlers/update-xero-invoice.handler.js";
 import { DeepLinkType, getDeepLink } from "../../helpers/get-deeplink.js";
 import { CreateXeroTool } from "../../helpers/create-xero-tool.js";
+import { xeroClient } from "../../clients/xero-client.js";
 
 const trackingSchema = z.object({
   name: z.string().describe("The name of the tracking category. Can be obtained from the list-tracking-categories tool"),
@@ -43,6 +44,11 @@ const UpdateInvoiceTool = CreateXeroTool(
     date: z.string().optional().describe("The date of the invoice."),
     contactId: z.string().optional().describe("The ID of the contact to update the invoice for. \
       Can be obtained from the list-contacts tool."),
+    attachments: z.array(z.object({
+      fileName: z.string().describe("File name with extension"),
+      mimeType: z.string().describe("MIME type (optional)").optional(),
+      base64Content: z.string().describe("Base64 encoded file")
+    })).describe("Array of file attachments").optional(),
   },
   async (
     {
@@ -52,6 +58,7 @@ const UpdateInvoiceTool = CreateXeroTool(
       dueDate,
       date,
       contactId,
+      attachments,
     }: {
       invoiceId: string;
       lineItems?: Array<{
@@ -65,6 +72,11 @@ const UpdateInvoiceTool = CreateXeroTool(
       dueDate?: string;
       date?: string;
       contactId?: string;
+      attachments?: Array<{
+        fileName: string;
+        mimeType?: string;
+        base64Content: string;
+      }>;
     },
     //_extra: { signal: AbortSignal },
   ) => {
@@ -93,6 +105,26 @@ const UpdateInvoiceTool = CreateXeroTool(
       ? await getDeepLink(DeepLinkType.INVOICE, invoice.invoiceID)
       : null;
 
+    const attachmentResults = [];
+    if (attachments && attachments.length > 0 && invoice.invoiceID) {
+      for (const attachment of attachments) {
+        try {
+          await xeroClient.accountingApi.createInvoiceAttachmentByFileName(
+            xeroClient.tenantId,
+            invoice.invoiceID,
+            attachment.fileName,
+            Buffer.from(attachment.base64Content, 'base64'),
+            true
+          );
+          attachmentResults.push({ fileName: attachment.fileName, status: 'success' });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`Attachment failed for ${attachment.fileName}:`, error);
+          attachmentResults.push({ fileName: attachment.fileName, status: 'failed', error: errorMessage });
+        }
+      }
+    }
+
     return {
       content: [
         {
@@ -102,8 +134,10 @@ const UpdateInvoiceTool = CreateXeroTool(
             `ID: ${invoice?.invoiceID}`,
             `Contact: ${invoice?.contact?.name}`,
             `Type: ${invoice?.type}`,
+            `Reference: ${invoice?.reference || 'None'}`,
             `Total: ${invoice?.total}`,
             `Status: ${invoice?.status}`,
+            attachmentResults.length > 0 ? `Attachments: ${attachmentResults.map(r => `${r.fileName} (${r.status})`).join(', ')}` : null,
             deepLink ? `Link to view: ${deepLink}` : null,
           ].join("\n"),
         },

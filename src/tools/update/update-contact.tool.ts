@@ -17,6 +17,7 @@ const UpdateContactTool = CreateXeroTool(
     lastName: z.string().optional(),
     email: z.string().email().optional(),
     phone: z.string().optional(),
+    bankAccountDetails: z.string().describe("Bank account number for the contact").optional(),
     address: z
       .object({
         addressLine1: z.string(),
